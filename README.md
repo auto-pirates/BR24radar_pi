@@ -1,5 +1,5 @@
-BR24radar_pi - Navico Broadband Radar Plugin for OpenCPN
 **Updated for use as a ROS Node**
+BR24radar_pi - Navico Broadband Radar Plugin for OpenCPN
 ========================================================
 
 Downloads
