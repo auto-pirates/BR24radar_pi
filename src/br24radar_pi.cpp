@@ -43,7 +43,7 @@
  - Smoother switching on of the 4G radar
  - Various smaller corrections
 
- Håkan Svensson for
+ HÃ¥kan Svensson for
  - Timed transmit function
  - Many tests
  - Translation files
@@ -54,6 +54,14 @@
 
 
 #include "br24radar_pi.h"
+
+#include <boost/interprocess/managed_shared_memory.hpp>
+#include <boost/interprocess/sync/named_mutex.hpp>
+#include <boost/interprocess/sync/named_condition.hpp>
+#include <boost/interprocess/sync/scoped_lock.hpp>
+#include <iostream>
+
+using namespace boost::interprocess;
 
 
 // A marker that uniquely identifies BR24 generation scanners, as opposed to 4G(eneration)
@@ -501,6 +509,22 @@ br24radar_pi::br24radar_pi(void *ppimgr)
 
 int br24radar_pi::Init(void)
 {
+    shared_memory_object::remove("Boost");
+
+    std::cout << sizeof(m_scan_line) << '\n';
+    try
+    {
+        managed_shared_memory managed_shm(open_or_create, "Boost", 2*sizeof(m_scan_line));
+        managed_shm.construct<scan_line>("ScanLines")[2][LINES_PER_ROTATION]();
+    }
+    catch (exception& e)
+    {
+        cout << e.what() << '\n';
+    }
+    //managed_shared_memory managed_shm(open_or_create, "Boost", sizeof(m_scan_line));
+    //managed_shm.construct<scan_line>("ScanLines")[2][LINES_PER_ROTATION]();
+
+
     int r;
 #ifdef __WXMSW__
     WSADATA wsaData;
@@ -1773,7 +1797,7 @@ void br24radar_pi::PrepareRadarImage(int angle)
         if (shader_start_line == -1) {
             shader_start_line = angle;
         }
-        shader_end_line = angle + 1;
+        shader_end_line = angle;
 
         // zero out texture data
         if(settings.display_option)
@@ -3386,7 +3410,38 @@ void RadarDataReceiveThread::process_buffer(radar_frame_pkt * packet, int len)
         }                                            // but only do this for the active radar
     }
 
+    //write image data to file, or pass to ROS
+    managed_shared_memory managed_shm(open_only, "Boost");      //created in init
+    interprocess_mutex *mtx = managed_shm.find_or_construct<interprocess_mutex>("mtx")();
 
+    std::pair<scan_line*, managed_shared_memory::size_type> res;
+
+    try {
+        res = managed_shm.find<scan_line>("ScanLines");
+    }
+    catch (exception& e) {
+        cout << e.what() << '\n';
+    }
+
+    int testmemcmp = 69;
+    mtx->lock();
+
+    if(res.first) {
+        if(AB == 0) {
+            memcpy(res.first, pPlugIn->m_scan_line, sizeof(pPlugIn->m_scan_line)/2);
+            testmemcmp = memcmp(res.first, pPlugIn->m_scan_line, sizeof(pPlugIn->m_scan_line));
+        }
+        
+        if(AB == 1) {
+            memcpy(res.first+2048, &pPlugIn->m_scan_line[1][0], sizeof(pPlugIn->m_scan_line)/2);
+            testmemcmp = memcmp(res.first+2048, &pPlugIn->m_scan_line[1][0], sizeof(pPlugIn->m_scan_line)/2);
+        }
+        
+    }
+
+    mtx->unlock();
+
+    std::cout << mtx << '\n';
     //  all scanlines ready now, refresh section follows
 
     if (pPlugIn->settings.showRadar && AB == pPlugIn->settings.selectRadarB) {  // only issue refresh for active and shown channel
@@ -3431,6 +3486,7 @@ void RadarDataReceiveThread::process_buffer(radar_frame_pkt * packet, int len)
 
 void RadarDataReceiveThread::emulate_fake_buffer(void)
 {
+
     wxLongLong nowMillis = wxGetLocalTimeMillis();
     time_t now = time(0);
     static int next_scan_number = 0;
@@ -3473,6 +3529,41 @@ void RadarDataReceiveThread::emulate_fake_buffer(void)
         pPlugIn->m_scan_line[AB][angle_raw].age = nowMillis;
         pPlugIn->PrepareRadarImage(angle_raw);
     }
+    
+    
+    managed_shared_memory managed_shm(open_only, "Boost");      //created in init
+    interprocess_mutex *mtx = managed_shm.find_or_construct<interprocess_mutex>("mtx")();
+
+    std::pair<scan_line*, managed_shared_memory::size_type> res;
+
+    try {
+        res = managed_shm.find<scan_line>("ScanLines");
+    }
+    catch (exception& e) {
+        cout << e.what() << '\n';
+    }
+
+    int testmemcmp = 69;
+    mtx->lock();
+
+    if(res.first) {
+        if(AB == 0) {
+            memcpy(res.first, pPlugIn->m_scan_line, sizeof(pPlugIn->m_scan_line)/2);
+            testmemcmp = memcmp(res.first, pPlugIn->m_scan_line, sizeof(pPlugIn->m_scan_line));
+        }
+        
+        if(AB == 1) {
+            memcpy(res.first+2048, &pPlugIn->m_scan_line[1][0], sizeof(pPlugIn->m_scan_line)/2);
+            testmemcmp = memcmp(res.first+2048, &pPlugIn->m_scan_line[1][0], sizeof(pPlugIn->m_scan_line)/2);
+        }
+        
+    }
+
+    mtx->unlock();
+
+    std::cout << mtx << '\n';
+
+
     if (pPlugIn->settings.verbose >= 2) {
         wxLogMessage(wxT("BR24radar_pi: %") wxTPRId64 wxT(" emulating %d spokes at range %d with %d spots"), nowMillis, scanlines_in_packet, range_meters, spots);
     }
